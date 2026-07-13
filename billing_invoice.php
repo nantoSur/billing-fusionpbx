@@ -3,7 +3,7 @@
 	require_once dirname(__DIR__, 2) . "/resources/require.php";
 	require_once "resources/check_auth.php";
 
-	if (!permission_exists('billing_view')) {
+	if (!permission_exists('billing_invoice') && !permission_exists('billing_view')) {
 		echo "access denied";
 		exit;
 	}
@@ -26,6 +26,19 @@
 		if ($pname) $provider_name = $pname;
 	}
 
+	if (!empty($_POST['action']) && $_POST['action'] == 'mark_invoiced' && is_array($_POST['selected_ids'])) {
+		if (permission_exists('billing_invoice')) {
+			foreach ($_POST['selected_ids'] as $id) {
+				if (is_uuid($id)) {
+					$database->execute("update v_cdr_rated set invoiced = 'true', update_date = now() where cdr_rated_uuid = :uuid", ['uuid' => $id]);
+				}
+			}
+			message::add($text['message-update'], 'positive');
+		}
+		header("Location: billing_invoice.php?start_date=".urlencode($start_date)."&end_date=".urlencode($end_date)."&provider_uuid=".urlencode($provider_uuid_filter)."&domain_uuid=".urlencode($domain_uuid_selected)."&invoiced=".urlencode($invoiced_filter));
+		exit;
+	}
+
 	if (empty($format)) {
 		$document['title'] = $text['title-billing_invoice'];
 		require_once "resources/header.php";
@@ -40,7 +53,7 @@
 	}
 
 	$sql = "select c.start_stamp, c.caller_id_number, c.destination_number, c.billsec, c.domain_name,
-		r.rate_prefix, r.total_cost, r.billable_seconds, r.rate_cost, r.currency,
+		r.cdr_rated_uuid, r.rate_prefix, r.total_cost, r.billable_seconds, r.rate_cost, r.currency, r.invoiced,
 		p.provider_name, ct.call_type_name
 		from v_cdr_rated r
 		inner join v_xml_cdr c on r.xml_cdr_uuid = c.xml_cdr_uuid
@@ -55,6 +68,11 @@
 		'start_date' => $start_date,
 		'end_date' => $end_date_plus_1,
 	];
+
+	if ($invoiced_filter === 'true' || $invoiced_filter === 'false') {
+		$sql .= "and r.invoiced = :invoiced ";
+		$parameters['invoiced'] = $invoiced_filter;
+	}
 
 	if (!empty($provider_uuid_filter) && is_uuid($provider_uuid_filter)) {
 		$sql .= "and r.provider_uuid = :provider_uuid ";
@@ -207,6 +225,21 @@
 	echo "</tr>\n";
 
 	echo "<tr>\n";
+	echo "<td class='vncell' valign='middle' align='left' nowrap>".$text['label-invoiced']."</td>\n";
+	echo "<td class='vtable' align='left'>\n";
+	echo "	<select class='formfld' name='invoiced' style='max-width: 220px;' onchange='this.form.submit()'>\n";
+	$inv_opts = ['false' => $text['label-no'], 'true' => $text['label-yes'], '' => '-- All --'];
+	foreach ($inv_opts as $val => $label) {
+		$sel = ($invoiced_filter == (string)$val) ? "selected='selected'" : '';
+		echo "		<option value='".escape($val)."' $sel>".$label."</option>\n";
+	}
+	echo "	</select>\n";
+	echo "</td>\n";
+	echo "<td class='vncell'>&nbsp;</td>\n";
+	echo "<td>&nbsp;</td>\n";
+	echo "</tr>\n";
+
+	echo "<tr>\n";
 	echo "<td class='vncell' valign='middle' align='left' nowrap>".$text['label-provider']."</td>\n";
 	echo "<td class='vtable' align='left'>\n";
 	echo "	<select class='formfld' name='provider_uuid' style='max-width: 220px;'>\n";
@@ -320,8 +353,29 @@
 	echo "	<div style='font-size: 11px; color: #888;'>Tanggal Cetak: ".date('d-m-Y H:i')."</div>\n";
 	echo "</div>\n";
 
+	echo "<form method='post' id='form_invoice'>\n";
+	echo "<input type='hidden' name='action' value='mark_invoiced'>\n";
+	echo "<input type='hidden' name='start_date' value='".escape($start_date)."'>\n";
+	echo "<input type='hidden' name='end_date' value='".escape($end_date)."'>\n";
+	echo "<input type='hidden' name='provider_uuid' value='".escape($provider_uuid_filter)."'>\n";
+	echo "<input type='hidden' name='domain_uuid' value='".escape($domain_uuid_selected)."'>\n";
+	echo "<input type='hidden' name='invoiced' value='".escape($invoiced_filter)."'>\n";
+
+	echo "<div class='card'>\n";
+
+	if (permission_exists('billing_invoice') && $invoiced_filter != 'true') {
+		echo "	<div style='float: right; margin-bottom: 10px;'>\n";
+		echo "		<button type='button' id='btn_mark_invoiced' class='btn' style='display: none; background: #34a853; color: #fff; border: none; padding: 6px 16px; border-radius: 3px; cursor: pointer; font-size: 13px;' onclick='confirmMarkInvoiced()'>\n";
+		echo "			<i class='fas fa-check-circle'></i> ".$text['button-mark_invoiced']."\n";
+		echo "		</button>\n";
+		echo "	</div>\n";
+	}
+
 	echo "<table class='list' style='width: 100%; border-collapse: collapse;'>\n";
 	echo "<tr class='list-header' style='background-color: #19376D; color: #fff;'>\n";
+	if (permission_exists('billing_invoice') && $invoiced_filter != 'true') {
+		echo "	<th class='checkbox' style='width: 30px;'><input type='checkbox' id='checkbox_all' onclick='toggleAllCheckboxes(this)'></th>\n";
+	}
 	echo "	<th style='width: 40px;'>No</th>\n";
 	echo "	<th>".$text['label-call_date']."</th>\n";
 	echo "	<th>".$text['label-caller']."</th>\n";
@@ -330,6 +384,9 @@
 	echo "	<th>Rate</th>\n";
 	echo "	<th class='center' style='width: 80px;'>".$text['label-duration']."</th>\n";
 	echo "	<th class='center' style='width: 100px;'>".$text['label-cost']."</th>\n";
+	if (permission_exists('billing_invoice')) {
+		echo "	<th class='center' style='width: 60px;'>".$text['label-invoiced']."</th>\n";
+	}
 	echo "</tr>\n";
 
 	$grand_total = 0;
@@ -339,7 +396,11 @@
 		foreach ($rows as $row) {
 			$i++;
 			$grand_total += $row['total_cost'] ?? 0;
+			$is_invoiced = ($row['invoiced'] ?? 'false') === true || $row['invoiced'] === 't' || $row['invoiced'] === 'true';
 			echo "<tr class='list-row'>\n";
+			if (permission_exists('billing_invoice') && $invoiced_filter != 'true') {
+				echo "	<td class='checkbox'><input type='checkbox' name='selected_ids[]' value='".escape($row['cdr_rated_uuid'])."' class='row_checkbox' onclick='updateMarkButton()'></td>\n";
+			}
 			echo "	<td style='text-align: center;'>".$i."</td>\n";
 			echo "	<td>".escape(substr($row['start_stamp'], 0, 16))."</td>\n";
 			echo "	<td>".escape($row['caller_id_number'] ?? '')."</td>\n";
@@ -348,21 +409,52 @@
 			echo "	<td>Rp ".number_format($row['rate_cost'] ?? 0, 0, ',', '.')."/mnt</td>\n";
 			echo "	<td class='center'>".($row['billsec'] ?? 0)." dtk</td>\n";
 			echo "	<td class='center'>Rp ".number_format($row['total_cost'] ?? 0, 0, ',', '.')."</td>\n";
+			if (permission_exists('billing_invoice')) {
+				echo "	<td class='center'>".($is_invoiced ? $text['label-yes'] : $text['label-no'])."</td>\n";
+			}
 			echo "</tr>\n";
 		}
 	} else {
+		$colspan = 7 + (permission_exists('billing_invoice') ? (($invoiced_filter != 'true') ? 2 : 1) : 0);
 		echo "<tr>\n";
-		echo "	<td colspan='8' style='text-align: center; padding: 30px; color: #999;'>".$text['label-no_cdrs']."</td>\n";
+		echo "	<td colspan='".$colspan."' style='text-align: center; padding: 30px; color: #999;'>".$text['label-no_cdrs']."</td>\n";
 		echo "</tr>\n";
 	}
 
+	$total_colspan = permission_exists('billing_invoice') && $invoiced_filter != 'true' ? 8 : 7;
 	echo "<tr class='list-row' style='font-weight: bold; background-color: #e8edf5; border-top: 2px solid #19376D;'>\n";
-	echo "	<td colspan='7' style='text-align: right; padding-right: 10px;'>".$text['label-total']." (".$i." calls):</td>\n";
+	echo "	<td colspan='".$total_colspan."' style='text-align: right; padding-right: 10px;'>".$text['label-total']." (".$i." calls):</td>\n";
 	echo "	<td class='center' style='color: #19376D;'>Rp ".number_format($grand_total, 0, ',', '.')."</td>\n";
+	if (permission_exists('billing_invoice')) {
+		echo "	<td></td>\n";
+	}
 	echo "</tr>\n";
 
 	echo "</table>\n";
 	echo "</div>\n";
+	echo "</form>\n";
+
+	echo "<script>
+function toggleAllCheckboxes(source) {
+	var checkboxes = document.querySelectorAll('.row_checkbox');
+	checkboxes.forEach(function(cb) { cb.checked = source.checked; });
+	updateMarkButton();
+}
+function updateMarkButton() {
+	var btn = document.getElementById('btn_mark_invoiced');
+	if (!btn) return;
+	var checked = document.querySelectorAll('.row_checkbox:checked').length;
+	btn.style.display = checked > 0 ? 'inline-block' : 'none';
+}
+function confirmMarkInvoiced() {
+	var checked = document.querySelectorAll('.row_checkbox:checked').length;
+	if (checked === 0) { alert('".$text['label-select_records']."'); return; }
+	if (confirm('".$text['confirm-mark_invoiced']."')) {
+		document.getElementById('form_invoice').submit();
+	}
+}
+document.addEventListener('DOMContentLoaded', updateMarkButton);
+</script>";
 
 	if (!empty($rows) && $i > 0) {
 		echo "<div class='card' style='margin-top: 16px; padding: 16px; text-align: right;'>\n";

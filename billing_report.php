@@ -4,7 +4,7 @@
 	require_once "resources/check_auth.php";
 	require_once "resources/paging.php";
 
-	if (!permission_exists('billing_view')) {
+	if (!permission_exists('billing_report') && !permission_exists('billing_view')) {
 		echo "access denied";
 		exit;
 	}
@@ -130,11 +130,11 @@
 					$provider_uuid = $database->select($sql_gw, ['gateway_name' => $gateway_name, 'gateway_name2' => $gateway_name], 'column');
 				}
 
-				$rate_sql = "
-					select r.provider_rate_uuid, r.rate_prefix, r.rate_cost, r.rate_setup_fee, r.rate_increment, r.rate_currency, r.provider_uuid
-					from v_provider_rates r
-					where r.rate_enabled = true
-				";
+			$rate_sql = "
+				select r.provider_rate_uuid, r.rate_prefix, r.rate_cost, r.rate_sale_cost, r.rate_setup_fee, r.rate_increment, r.rate_currency, r.provider_uuid
+				from v_provider_rates r
+				where r.rate_enabled = true
+			";
 				$rate_params = [];
 
 				if ($provider_uuid) {
@@ -149,13 +149,15 @@
 				$rate = $database->select($rate_sql, $rate_params, 'row');
 
 				if (empty($rate)) {
-					$sql_ins = "insert into v_cdr_rated (cdr_rated_uuid, domain_uuid, xml_cdr_uuid, total_cost, invoiced, insert_date) ";
-					$sql_ins .= "values (:cdr_rated_uuid, :domain_uuid, :xml_cdr_uuid, :total_cost, :invoiced, now())";
+					$sql_ins = "insert into v_cdr_rated (cdr_rated_uuid, domain_uuid, xml_cdr_uuid, total_cost, sale_cost, profit, invoiced, insert_date) ";
+					$sql_ins .= "values (:cdr_rated_uuid, :domain_uuid, :xml_cdr_uuid, :total_cost, :sale_cost, :profit, :invoiced, now())";
 					$database->execute($sql_ins, [
 						'cdr_rated_uuid' => uuid(),
 						'domain_uuid' => $domain_uuid,
 						'xml_cdr_uuid' => $cdr['xml_cdr_uuid'],
 						'total_cost' => 0,
+						'sale_cost' => 0,
+						'profit' => 0,
 						'invoiced' => 'false',
 					]);
 					continue;
@@ -170,11 +172,16 @@
 				$rate_cost_per_min = (float)($rate['rate_cost'] ?? 0);
 				$setup_fee = (float)($rate['rate_setup_fee'] ?? 0);
 
+				$rate_sale_cost_per_min = (float)($rate['rate_sale_cost'] ?? 0);
 				$total_cost = ($rate_cost_per_min / 60) * $billable_seconds + $setup_fee;
 				$total_cost = round($total_cost, 2);
 
-				$sql_ins = "insert into v_cdr_rated (cdr_rated_uuid, domain_uuid, xml_cdr_uuid, provider_uuid, provider_rate_uuid, rate_prefix, rate_cost, rate_increment, billable_seconds, setup_fee, total_cost, currency, invoiced, insert_date) ";
-				$sql_ins .= "values (:cdr_rated_uuid, :domain_uuid, :xml_cdr_uuid, :provider_uuid, :provider_rate_uuid, :rate_prefix, :rate_cost, :rate_increment, :billable_seconds, :setup_fee, :total_cost, :currency, :invoiced, now())";
+				$sale_cost = $rate_sale_cost_per_min > 0 ? ($rate_sale_cost_per_min / 60) * $billable_seconds + $setup_fee : 0;
+				$sale_cost = round($sale_cost, 2);
+				$profit = $sale_cost > 0 ? round($sale_cost - $total_cost, 2) : 0;
+
+				$sql_ins = "insert into v_cdr_rated (cdr_rated_uuid, domain_uuid, xml_cdr_uuid, provider_uuid, provider_rate_uuid, rate_prefix, rate_cost, rate_increment, billable_seconds, setup_fee, total_cost, sale_cost, profit, currency, invoiced, insert_date) ";
+				$sql_ins .= "values (:cdr_rated_uuid, :domain_uuid, :xml_cdr_uuid, :provider_uuid, :provider_rate_uuid, :rate_prefix, :rate_cost, :rate_increment, :billable_seconds, :setup_fee, :total_cost, :sale_cost, :profit, :currency, :invoiced, now())";
 				$database->execute($sql_ins, [
 					'cdr_rated_uuid' => uuid(),
 					'domain_uuid' => $domain_uuid,
@@ -187,6 +194,8 @@
 					'billable_seconds' => $billable_seconds,
 					'setup_fee' => $setup_fee,
 					'total_cost' => $total_cost,
+					'sale_cost' => $sale_cost,
+					'profit' => $profit,
 					'currency' => $rate['rate_currency'] ?? 'IDR',
 					'invoiced' => 'false',
 				]);
@@ -372,7 +381,7 @@
 
 	$parameters = [];
 	$sql = "select c.start_stamp, c.caller_id_number, c.destination_number, c.billsec, c.domain_name,
-		r.cdr_rated_uuid, r.rate_prefix, r.rate_cost, r.rate_increment, r.billable_seconds, r.total_cost, r.setup_fee, r.currency, r.provider_uuid,
+		r.cdr_rated_uuid, r.rate_prefix, r.rate_cost, r.rate_increment, r.billable_seconds, r.total_cost, r.sale_cost, r.profit, r.setup_fee, r.currency, r.provider_uuid,
 		p.provider_name, pr.rate_name, ct.call_type_name
 		from v_cdr_rated r
 		inner join v_xml_cdr c on r.xml_cdr_uuid = c.xml_cdr_uuid
@@ -432,8 +441,10 @@
 	echo "	<th>".$text['label-destination']."</th>\n";
 	echo "	<th class='center'>".$text['label-billsec']."</th>\n";
 	echo "	<th class='center'>".$text['label-billable_seconds']."</th>\n";
-	echo "	<th class='center'>".$text['label-rate_cost']."</th>\n";
-	echo "	<th class='center'>".$text['label-cost']."</th>\n";
+	echo "  <th class='center'>".$text['label-rate_cost']."</th>\n";
+	echo "  <th class='center'>".$text['label-cost']."</th>\n";
+	echo "  <th class='center'>".$text['label-sale_price']."</th>\n";
+	echo "  <th class='center'>".$text['label-profit']."</th>\n";
 	echo "</tr>\n";
 
 	$grand_total = 0;
@@ -456,13 +467,15 @@
 			echo "	<td>".escape($row['rate_name'] ?? '-')."</td>\n";
 			echo "	<td class='center'>".escape($row['billsec'])."</td>\n";
 			echo "	<td class='center'>".number_format($row['billable_seconds'] ?? 0, 0, ',', '.')."</td>\n";
-			echo "	<td class='center'>Rp ".number_format($row['rate_cost'] ?? 0, 0, ',', '.')."/min</td>\n";
-			echo "	<td class='center'>Rp ".number_format($cost, 0, ',', '.')."</td>\n";
+			echo "  <td class='center'>Rp ".number_format($row['rate_cost'] ?? 0, 0, ',', '.')."/min</td>\n";
+			echo "  <td class='center'>Rp ".number_format($cost, 0, ',', '.')."</td>\n";
+			echo "  <td class='center'>Rp ".number_format($row['sale_cost'] ?? 0, 0, ',', '.')."</td>\n";
+			echo "  <td class='center'>Rp ".number_format($row['profit'] ?? 0, 0, ',', '.')."</td>\n";
 			echo "</tr>\n";
 		}
 	} else {
 		echo "<tr>\n";
-		$colspan = permission_exists('billing_rates_delete') ? 12 : 11;
+		$colspan = permission_exists('billing_rates_delete') ? 13 : 12;
 		echo "	<td colspan='".$colspan."'>".$text['label-no_cdrs']."</td>\n";
 		echo "</tr>\n";
 	}
@@ -471,6 +484,8 @@
 	$colspan = permission_exists('billing_rates_delete') ? 10 : 9;
 	echo "	<td colspan='".$colspan."' style='text-align: right;'>".$text['label-total']." ($total_calls calls):</td>\n";
 	echo "	<td class='center'>Rp ".number_format($grand_total, 0, ',', '.')."</td>\n";
+	echo "	<td></td>\n";
+	echo "	<td></td>\n";
 	echo "</tr>\n";
 
 	echo "</table>\n";

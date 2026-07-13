@@ -303,4 +303,31 @@ $text['message-import_success']['id'] = "Berhasil diimpor: %s";
 $text['description-import']['en-us'] = "Upload a CSV file to import records. The first row should contain field names matching the database columns.";
 $text['description-import']['id'] = "Unggah file CSV untuk mengimpor data. Baris pertama harus berisi nama field yang sesuai dengan kolom database.";
 
+$text['label-invoiced']['en-us'] = "Invoiced";
+$text['label-invoiced']['id'] = "Telah Ditagih";
+
+$text['label-no']['en-us'] = "No";
+$text['label-no']['id'] = "Belum";
+
+$text['label-yes']['en-us'] = "Yes";
+$text['label-yes']['id'] = "Sudah";
+
+$text['label-sale_price']['en-us'] = "Sale Price";
+$text['label-sale_price']['id'] = "Harga Jual";
+
+$text['label-purchase_cost']['en-us'] = "Purchase Cost";
+$text['label-purchase_cost']['id'] = "Biaya Beli";
+
+$text['label-profit']['en-us'] = "Profit";
+$text['label-profit']['id'] = "Keuntungan";
+
+$text['button-mark_invoiced']['en-us'] = "Mark as Invoiced";
+$text['button-mark_invoiced']['id'] = "Tandai Telah Ditagih";
+
+$text['label-select_records']['en-us'] = "Please select at least one record.";
+$text['label-select_records']['id'] = "Pilih setidaknya satu data.";
+
+$text['confirm-mark_invoiced']['en-us'] = "Mark selected CDRs as invoiced?";
+$text['confirm-mark_invoiced']['id'] = "Tandai CDR terpilih sebagai sudah ditagih?";
+
 ?>
